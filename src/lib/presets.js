@@ -17,6 +17,21 @@ export const BUILTIN_PRESETS = [
     builtin: true,
   },
   {
+    // EECS 16A — Ayazifar. Lowest-two-dropped HW rule isn't modeled here;
+    // students can pre-average their kept homework scores.
+    id: 'builtin-eecs16a-ayazifar',
+    name: 'EECS 16A - Ayazifar',
+    school: 'UC Berkeley',
+    structure: [
+      { name: 'Homework', weight: 10, outOf: 10  },
+      { name: 'Lab',      weight: 20, outOf: 5   },
+      { name: 'Exam 1',   weight: 20, outOf: 200 },
+      { name: 'Exam 2',   weight: 25, outOf: 200 },
+      { name: 'Exam 3',   weight: 25, outOf: 200 },
+    ],
+    builtin: true,
+  },
+  {
     // CS61B Track D — weights derived from points / 3000 total.
     id: 'builtin-cs61b-hug',
     name: 'CS 61B - Josh Hug',
