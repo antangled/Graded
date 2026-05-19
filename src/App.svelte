@@ -525,7 +525,7 @@
 
       <p class="muted small">
         Leave <em>Score</em> blank for items you haven't taken yet. Scores above 100 are
-        allowed (use them for extra credit). Click <span class="kbd">ƒ</span> on any row to apply a curve.
+        allowed (use them for extra credit). Click <span class="kbd">ƒ</span> on any row to apply a curve or clobber.
       </p>
     </section>
 
