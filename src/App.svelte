@@ -3,6 +3,7 @@
   import {
     currentAverage,
     effectiveScore,
+    effectiveScoreOwn,
     lockedInContribution,
     letterFor,
     projectionTable,
@@ -114,6 +115,17 @@
     const c = rows.find((r) => r.id === row.clobber.clobberedBy);
     if (!c || c.score === null || c.score === '' || c.score === undefined) return null;
     return effectiveScore(c, rows);
+  }
+  // True iff the clobber actually changes this row's effective — i.e. the
+  // clobberer is graded AND its effective is strictly higher than this row's
+  // own (pre-clobber) effective.
+  function clobberApplied(row) {
+    if (!row.clobber || !row.clobber.clobberedBy) return false;
+    const cEff = clobbererScore(row);
+    if (cEff === null) return false;
+    const ownEff = effectiveScoreOwn(row);
+    if (ownEff === null) return false;
+    return cEff > ownEff;
   }
   function onScoreInput(row, value) {
     row.score = value === '' ? null : Number(value);
@@ -356,7 +368,7 @@
               {#if showEff(row)}
                 <span class="eff-hint">
                   → {fmt(effectiveScore(row, rows), 1)}%
-                  {#if clobbererName(row)}<span class="eff-meta">← {clobbererName(row)}</span>{/if}
+                  {#if clobberApplied(row)}<span class="eff-meta">← {clobbererName(row)}</span>{/if}
                 </span>
               {/if}
             </div>
@@ -473,13 +485,14 @@
                   <div class="curve-math">
                     {#if !clobbererName(row)}
                       <span class="muted">pick a later row to clobber from</span>
+                    {:else if clobbererScore(row) === null}
+                      will replace this row with <strong>{clobbererName(row)}</strong>'s effective once it's graded — only if higher
+                    {:else if clobberApplied(row)}
+                      this row's score is replaced by <strong>{clobbererName(row)}</strong>'s effective
+                      (<strong>{fmt(clobbererScore(row), 1)}%</strong>)
                     {:else}
-                      this row's score is replaced by <strong>{clobbererName(row)}</strong>'s effective score
-                      {#if clobbererScore(row) !== null}
-                        (<strong>{fmt(clobbererScore(row), 1)}%</strong>)
-                      {:else}
-                        — once it's graded
-                      {/if}
+                      <strong>{clobbererName(row)}</strong>'s effective ({fmt(clobbererScore(row), 1)}%)
+                      is not higher than this row — clobber doesn't apply
                     {/if}
                   </div>
                 </div>

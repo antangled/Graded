@@ -28,27 +28,34 @@ const hasValue = (v) =>
 // outOf defaults to 100 — rows that omit it behave as straight percentages.
 //
 // Modifier application order:
-//   1. Clobber — if set and the clobbering row has a score, replace this row's
-//      effective % with the clobberer's effective %. The clobbered row's own
-//      curve is bypassed (the score isn't "ours" anymore).
-//   2. Fraction — divide earned by outOf to get percent.
-//   3. Curve — shift by (target - mean).
+//   1. Fraction — divide earned by outOf to get percent.
+//   2. Curve — shift by (target - mean).
+//   3. Clobber — if the clobberer's effective is HIGHER than this row's own
+//      post-curve %, replace with the clobberer's effective. Clobber can only
+//      help — if the clobberer would lower the score, clobber is nullified.
 //
 // `rows` is the full row list; required to resolve clobber cross-references.
 // `depth` guards against accidental clobber cycles.
 export function effectiveScore(row, rows, depth = 0) {
   if (depth > 5) return null;
-  if (!hasValue(row.score)) return null;
+  const ownPct = effectiveScoreOwn(row);
+  if (ownPct === null) return null;
 
   if (row.clobber && row.clobber.clobberedBy && Array.isArray(rows)) {
     const clobberer = rows.find((r) => r.id === row.clobber.clobberedBy);
     if (clobberer && hasValue(clobberer.score)) {
-      const v = effectiveScore(clobberer, rows, depth + 1);
-      if (v !== null) return v;
+      const clobScore = effectiveScore(clobberer, rows, depth + 1);
+      if (clobScore !== null && clobScore > ownPct) return clobScore;
     }
-    // Clobberer not graded yet → fall through and use this row's own score.
+    // Otherwise (clobberer ungraded, or lower than own): use own.
   }
+  return ownPct;
+}
 
+// Same as effectiveScore but never applies clobber — just fraction + curve.
+// Used wherever we need the row's "without clobber" value (UI hint, projection).
+export function effectiveScoreOwn(row) {
+  if (!hasValue(row.score)) return null;
   const earned = Number(row.score);
   const outOf = hasValue(row.outOf) ? Number(row.outOf) : 100;
   if (outOf === 0) return null;
@@ -56,8 +63,6 @@ export function effectiveScore(row, rows, depth = 0) {
   if (!row.curve) return pct;
   const { mean, target } = row.curve;
   if (!hasValue(mean) || !hasValue(target)) return pct;
-  // mean is in raw points (same scale as the row's outOf); convert to a
-  // percentage before computing the shift so it matches the target's units.
   const meanPct = (Number(mean) / outOf) * 100;
   return pct + (Number(target) - meanPct);
 }
@@ -117,23 +122,43 @@ function curveShiftOf(row) {
 // Uniform raw score (as a percentage out of 100) that, applied to every
 // still-influence-able row, makes the final weighted grade equal `targetPct`.
 //
-// "Influence-able" means either ungraded, or graded but clobbered by an
-// ungraded row (in which case its effective score will change as soon as
-// the clobberer is graded). The math:
-//
-//   final = Σ_r effective_r × weight_r / 100  =  targetPct
-//
-// Each row contributes either a constant or a term linear in X (the uniform
-// raw score we're solving for):
-//   - Graded & clobber resolves to graded → constant: effective × weight / 100
-//   - Clobbered by ungraded row c          → linear: X + curveShift(c)
-//   - Plain ungraded with optional curve   → linear: X + curveShift(r)
-//
-// Returns null if no rows are X-dependent (nothing left to project).
+// Because clobber is conditional ("only if it helps"), the total grade is a
+// piecewise-linear function of X with a kink at each clobber's break-even
+// point. Rather than enumerating 2ⁿ branches analytically, we binary-search
+// over X: `gradeAt(X)` is monotonically increasing in X, so the unique X
+// where it equals targetPct is found in 50 iterations to ~10⁻¹⁵ precision.
 export function neededOnRemaining(rows, targetPct) {
-  let totalBase = 0;
-  let totalX = 0;
+  // True if any row's contribution depends on X — either an ungraded row, or
+  // a graded row whose clobberer is still ungraded (it might pick up X's value).
+  const hasXDep = rows.some((r) => {
+    const w = num(r.weight);
+    if (w === 0) return false;
+    if (!isGraded(r, rows)) return true;
+    if (r.clobber && r.clobber.clobberedBy) {
+      const c = rows.find((x) => x.id === r.clobber.clobberedBy);
+      if (c && !hasValue(c.score)) return true;
+    }
+    return false;
+  });
+  if (!hasXDep) return null;
 
+  const gradeAt = (X) => gradeAssumingRemainingScore(rows, X);
+
+  // Bracket: -200 well below any "already locked in" case, 200 well above any
+  // achievable target. Binary search converges from there.
+  let lo = -200, hi = 200;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    if (gradeAt(mid) < targetPct) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+// Total grade percentage assuming every X-dependent row scores raw X% (after
+// any curve). Used by the binary search above and exposed for testing.
+function gradeAssumingRemainingScore(rows, X) {
+  let total = 0;
   for (const r of rows) {
     const w = num(r.weight);
     if (w === 0) continue;
@@ -143,25 +168,23 @@ export function neededOnRemaining(rows, targetPct) {
       : null;
     const clobbererUngraded = clobberer && !hasValue(clobberer.score);
 
+    let rowEff;
     if (clobberer && clobbererUngraded) {
-      // Row's effective will be the clobberer's effective once it's graded.
-      const shift = curveShiftOf(clobberer);
-      totalBase += shift * w / 100;
-      totalX += w / 100;
+      // Clobberer's hypothetical effective if it scores X: X + clobberer's curve shift.
+      const cEff = X + curveShiftOf(clobberer);
+      // This row's own effective without clobber. If r is also ungraded, X + r's shift.
+      const rOwn = hasValue(r.score) ? effectiveScoreOwn(r) : X + curveShiftOf(r);
+      // Conditional clobber: only fires if cEff > rOwn.
+      rowEff = Math.max(cEff, rOwn ?? cEff);
     } else if (isGraded(r, rows)) {
-      // Row is graded (and clobber, if any, resolves to a graded row).
-      const eff = effectiveScore(r, rows);
-      totalBase += eff * w / 100;
+      rowEff = effectiveScore(r, rows);
     } else {
-      // Row is ungraded with no clobber — uses its own curve, if any.
-      const shift = curveShiftOf(r);
-      totalBase += shift * w / 100;
-      totalX += w / 100;
+      // Plain ungraded — uses its own curve, if any.
+      rowEff = X + curveShiftOf(r);
     }
+    total += rowEff * w / 100;
   }
-
-  if (totalX === 0) return null;
-  return (targetPct - totalBase) / totalX;
+  return total;
 }
 
 // Returns the full projection table for the standard target letters.
