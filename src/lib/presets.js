@@ -34,7 +34,7 @@ export const BUILTIN_PRESETS = [
   {
     // CS61B Track D — weights derived from points / 3000 total.
     id: 'builtin-cs61b-hug',
-    name: 'CS 61B - Josh Hug',
+    name: 'CS 61B - Hug',
     school: 'UC Berkeley',
     structure: [
       { name: 'Weekly Surveys',        weight: 2,     outOf: 60  },
